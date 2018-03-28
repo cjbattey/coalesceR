@@ -19,7 +19,9 @@
 #counts for each branch in the order of the branches in the phylo object, and a table
 #summarizing each coalescent event. 
 
-sim_coal_discrete <- function(nsamples=8,n=10000,max_gen=1e7,mu=2e-8,nsites=1000){
+
+sim_coal_discrete <- function(nsamples=8,n=10000,max_gen=1e7,mu=2e-8,nsites=1000,track_muts=T){
+  require(ape);require(stringr)
   lineages <- c(LETTERS, sapply(LETTERS, function(x) paste0(x, LETTERS)))[1:nsamples]
   #lineages <- sample(1:n,nsamples)
   mu <- mu*nsites
@@ -30,6 +32,7 @@ sim_coal_discrete <- function(nsamples=8,n=10000,max_gen=1e7,mu=2e-8,nsites=1000
   coal_table <- data.frame(gen=integer(),l1=character(),l2=character(),
                            bl1=integer(),bl2=integer(),mut1=integer(),
                            mut2=integer())
+  mutations <- data.frame(gen=NA,ndesc=NA)[-1,]
   while(length(lineages)>1 & gen<max_gen){
     if(length(n)>1){
       n <- n[j]
@@ -41,9 +44,20 @@ sim_coal_discrete <- function(nsamples=8,n=10000,max_gen=1e7,mu=2e-8,nsites=1000
       l2 <- lineages[coal_pair[2]]
       bl1 <- gen-node_ages[coal_pair[1]]                                #record branch lengths
       bl2 <- gen-node_ages[coal_pair[2]]
+      ndesc1 <- str_count(l1,"\\(")+1
+      ndesc2 <- str_count(l2,"\\(")+1
       mut1 <- sum(rbinom(bl1,1,mu))                                     #get n mutations for each branch by binomial sampling with prob=mu each generation
+      if(mut1>0){
+        mut_gens <-  sample(node_ages[coal_pair[1]]:gen,mut1)
+        mutations <- rbind(mutations,data.frame(gen=mut_gens,ndesc=ndesc1))
+      }
       mut2 <- sum(rbinom(bl2,1,mu))
-      coal_table <- rbind(coal_table,data.frame(gen,l1,l2,bl1,bl2,mut1,mut2))
+      if(mut2>0){
+        mut_gens <-  sample(node_ages[coal_pair[2]]:gen,mut2)
+        mutations <- rbind(mutations,data.frame(gen=mut_gens,ndesc=ndesc1))
+      }
+      
+      coal_table <- rbind(coal_table,data.frame(gen,l1,l2,bl1,bl2,mut1,mut2,ndesc1,ndesc2))
       
       lineages[coal_pair[1]] <- paste0("(",l1,":",                      #update lineage and node age vectors
                                        bl1,",",
@@ -58,59 +72,43 @@ sim_coal_discrete <- function(nsamples=8,n=10000,max_gen=1e7,mu=2e-8,nsites=1000
   }
   newick <- paste0(lineages,";")
   tree <- read.tree(text=newick)
-  return(list(tree,coal_table))
+  return(list(tree,coal_table,mutations))
 }
 
 coalesce <- function(nsamples=8,n=10000,max_gen=1e7,mu=2e-8,nsites=1000,sims=1,cores=1){
-  require(ape);require(magrittr);require(ape);require(ggtree);require(plyr);require(foreach);require(doMC)
+  require(foreach);require(doMC)
   registerDoMC(cores=cores)
   out <- foreach(i=1:sims) %dopar% sim_coal_discrete(nsamples = nsamples,
                                                      n = n,max_gen = max_gen,
                                                      mu = mu,nsites = nsites)
   trees <- lapply(out,function(e) e[[1]])
   tables <- lapply(out,function(e) e[[2]])
-  out <- list(trees,tables)
-  names(out) <- c("trees","tables")
+  mutations <- lapply(out,function(e) e[[3]])
+  out <- list(trees,tables,mutations)
+  names(out) <- c("trees","tables","mutations")
   return(out)
 }
 
-get_sfs <- function(sim,plot=F,sum=T){
-  require(stringr);require(plyr)
-  sfs_list <- lapply(sim$tables,function(e){
-    e$n_desc_1 <- str_count(e$l1,"\\(")+1
-    e$n_desc_2 <- str_count(e$l2,"\\(")+1
-    sfs <- c(e$mut1,e$mut2,e$n_desc_1,e$n_desc_2) %>% 
-      matrix(ncol=2,byrow=F) %>% 
-      data.frame() %>% 
-      ddply(.(X2),summarize,count=sum(X1))
-    names(sfs) <- c("n_individuals","n_sites")
-    return(sfs)
-  })
-  if(sum==T){
-    sfs <- do.call(rbind.data.frame,sfs_list)
-  } else {
-    sfs <- sfs_list()
-  }
-  if(plot==T){
-    print(ggplot(data=sfs,aes(x=factor(n_individuals),y=n_sites))+
-            theme_bw()+theme(panel.grid = element_blank())+
-            xlab("derived allele count")+
-            ylab("sites")+
-            geom_bar(stat="identity"))
-  }
-  return(sfs)
-}
-
-plot_coal_tree <- function(sim,n=NULL,n_col=1){
+plot_coal_tree <- function(sim,n=NULL,n_col=1,axis=F,tip_labels=F,mar=0.5,cex=0.75,edge_colors=T,bw=T,brewerpal="RdYlBu"){
+  require(RColorBrewer);require(ggplot2);require(ape);require(plyr)
   if(is.null(n)){
     n <- length(sim$trees)
   }
   par(mfrow=c(ceiling(min(n,length(sim$trees))/n_col),n_col),
-      mar=rep(2,4))
+      mar=rep(mar,4))
   for(j in 1:min(n,length(sim$trees))){
     tree <- sim$trees[[j]]
     coal_table <- sim$tables[[j]]
-    mutations <- c()
+    
+    sfs_class <- c() #build vector of n_descendents in order of branches in phylo object
+    for(i in tree$edge.length){
+      if(i %in% coal_table$bl1){
+        sfs_class <- append(sfs_class,subset(coal_table,bl1==i)$ndesc1)
+      } else if(i %in% coal_table$bl2){
+        sfs_class <- append(sfs_class,subset(coal_table,bl2==i)$ndesc2)  }
+    }
+    
+    mutations <- c() #build vector of mutations in order of branches in phylo object
     for(i in tree$edge.length){
       if(i %in% coal_table$bl1){
         mutations <- append(mutations,subset(coal_table,bl1==i)$mut1)
@@ -118,14 +116,49 @@ plot_coal_tree <- function(sim,n=NULL,n_col=1){
         mutations <- append(mutations,subset(coal_table,bl2==i)$mut2)  }
     }
     mutations[mutations==0] <- NA
-    plot(tree,cex=0.65,xpd=F)
-    axisPhylo(cex.axis=0.65)
-    edgelabels(mutations,frame="none",cex=0.65,adj=c(0.5,-0.3))
+    
+    if(edge_colors==T){
+      if(bw==T){
+        col <- mapvalues(sfs_class,from=1:(length(tree$tip.label)-1),
+                         to=grey.colors(length(tree$tip.label)-1,start=0.1))
+        plot(tree,xpd=F,edge.color = col,show.tip.label = tip_labels,edge.width = 1.75)
+      } else if(bw==F){
+        col <- mapvalues(sfs_class,from=1:(length(tree$tip.label)-1),
+                         #to=grey.colors(length(tree$tip.label)-1,start=0.1))
+                         to=rev(brewer.pal(length(tree$tip.label)-1,brewerpal)))
+        plot(tree,xpd=F,edge.color = col,show.tip.label = tip_labels,edge.width = 1.75)
+      }
+    } else if(edge_colors==F){
+      mutations[mutations==0] <- NA
+      plot(tree,cex=cex,xpd=F,edge.width=1.75,show.tip.label=tip_labels)
+      edgelabels(mutations,frame="none",cex=cex,adj=c(0.5,-0.3))
+    }
+    if(axis==T){
+      axisPhylo(cex.axis=0.65)
+    }
   }
   par(mfrow=c(1,1))
 }
 
+getsfsdata <- function(i){
+  matrix(c(i$ndesc1,i$ndesc2,i$mut1,i$mut2),nrow=2,byrow=F)
+}
 
+get_sfs <- function(sim,plot=F,sum=T,cores=8){
+  require(foreach)
+  registerDoMC(cores=cores)
+  sfs <- foreach(i=sim$tables,.combine = rbind) %dopar% getsfsdata(i)
+  sfs <- tapply(sfs[,2],sfs[,1],function(e) sum(e))
+  sfs <- data.frame(n_ind=1:9,n_sites=sfs)
+  if(plot==T){
+    print(ggplot(data=sfs,aes(x=factor(n_ind),y=n_sites))+
+            theme_bw()+theme(panel.grid = element_blank())+
+            xlab("derived allele count")+
+            ylab("sites")+
+            geom_bar(stat="identity"))
+  }
+  return(sfs)
+}
 
 
 

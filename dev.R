@@ -1,83 +1,40 @@
 source("functions.R")
-library(stringr);library(plyr);library(ggplot2);library(magrittr);library(ggridges)
 
-#tracking generation of mutations for plots of sfs class frequency ~ generation
+sim <- coalesce(nsamples = 10,nsites=16000,sims=10000,cores=8,mu=2e-8)
 
-sim_coal_discrete_mut <- function(nsamples=8,n=10000,max_gen=1e7,mu=2e-8,nsites=1000){
-  lineages <- c(LETTERS, sapply(LETTERS, function(x) paste0(x, LETTERS)))[1:nsamples]
-  #lineages <- sample(1:n,nsamples)
-  mu <- mu*nsites
-  gen <- 0
-  j <- 1
-  node_ages <- rep(0,nsamples)
-  node_tbl <- data.frame(id=1:nsamples,age=rep(0,nsamples))
-  coal_table <- data.frame(gen=integer(),l1=character(),l2=character(),
-                           bl1=integer(),bl2=integer(),mut1=integer(),
-                           mut2=integer())
-  mutations <- data.frame(gen=NA,ndesc=NA)[-1,]
-  while(length(lineages)>1 & gen<max_gen){
-    if(length(n)>1){
-      n <- n[j]
-    }
-    coal <- rbinom(length(lineages),1,(length(lineages)-1)/n)           #each of k lineages has a (k-1)/n probability of coalescence per generation
-    if(any(coal)){ 
-      coal_pair <- sample(1:length(lineages),2)                         #choose two lineages to coalesce
-      l1 <- lineages[coal_pair[1]]
-      l2 <- lineages[coal_pair[2]]
-      bl1 <- gen-node_ages[coal_pair[1]]                                #record branch lengths
-      bl2 <- gen-node_ages[coal_pair[2]]
-      mut1 <- sum(rbinom(bl1,1,mu))                                     #get n mutations for each branch by binomial sampling with prob=mu each generation
-      if(mut1>0){
-        mut_gens <-  sample(node_ages[coal_pair[1]]:gen,mut1)
-        ndesc1 <- str_count(l1,"\\(")+1
-        mutations <- rbind(mutations,data.frame(gen=mut_gens,ndesc=ndesc1))
-      }
-      mut2 <- sum(rbinom(bl2,1,mu))
-      if(mut2>0){
-        mut_gens <-  sample(node_ages[coal_pair[2]]:gen,mut2)
-        ndesc2 <- str_count(l2,"\\(")+1
-        mutations <- rbind(mutations,data.frame(gen=mut_gens,ndesc=ndesc1))
-      }
-      
-      coal_table <- rbind(coal_table,data.frame(gen,l1,l2,bl1,bl2,mut1,mut2))
-      
-      lineages[coal_pair[1]] <- paste0("(",l1,":",                      #update lineage and node age vectors
-                                       bl1,",",
-                                       l2,":",    
-                                       bl2,")")     
-      lineages <- lineages[-coal_pair[2]]                                         
-      node_ages[coal_pair[1]] <- gen
-      node_ages <- node_ages[-coal_pair[2]] 
-    }
-    gen <- gen+1
-    j <- j+1
-  }
-  newick <- paste0(lineages,";")
-  tree <- read.tree(text=newick)
-  return(list(tree,coal_table,mutations))
-}
+pdf(width=3,height=3,"sfs_ridge_plot_color.pdf")
+#plot coalescent trees with edges colored by the number of descendent lineages
+plot_coal_tree(sim,n_col=3,n=9,edge_colors = T,mar=1,cex=1,bw=F,brewerpal="YlOrRd")
 
-coalesce_mut <- function(nsamples=8,n=10000,max_gen=1e7,mu=2e-8,nsites=1000,sims=1,cores=1){
-  require(ape);require(magrittr);require(ape);require(ggtree);require(plyr);require(foreach);require(doMC)
-  registerDoMC(cores=cores)
-  out <- foreach(i=1:sims) %dopar% sim_coal_discrete_mut(nsamples = nsamples,
-                                                     n = n,max_gen = max_gen,
-                                                     mu = mu,nsites = nsites)
-  trees <- lapply(out,function(e) e[[1]])
-  tables <- lapply(out,function(e) e[[2]])
-  mutations <- lapply(out,function(e) e[[3]])
-  out <- list(trees,tables,mutations)
-  names(out) <- c("trees","tables","mutations")
-  return(out)
-}
-
-sim <- coalesce_mut(nsamples = 30,nsites=16000,sims=1000,cores=8,mu=2e-7)
-
+#get mutation generations
 muts <- do.call(rbind.data.frame,sim$mutations) 
-muts <- subset(muts,ndesc<=20)
-ggplot(data=muts,aes(x=gen,y=factor(ndesc)))+
+muts <- subset(muts,ndesc<=10)
+med_mut_times <- ddply(muts,.(ndesc),summarize,med_gen=median(gen))
+
+#ridge plot for time distributions of mutations in each SFS class
+ridges <- ggplot(data=muts,aes(x=gen,y=factor(ndesc),fill=factor(ndesc)))+
+  #scale_fill_manual(values=grey.colors(max(muts$ndesc),start=0.1),guide=F)+
+  scale_fill_manual(values=rev(brewer.pal(max(muts$ndesc),"YlOrRd")),guide=F)+
+  ylab("Derived Allele Count")+xlab("Mutation Time\n (generations before present)")+
+  theme_bw()+theme(panel.grid=element_blank(),
+                   axis.text = element_text(size=8),
+                   axis.title = element_text(size=8))+
+  scale_x_continuous(breaks=c(0,6000,12000),limits=c(0,12000))+
+  geom_density_ridges(lwd=0.25)+
+  geom_segment(data=med_mut_times,aes(x=med_gen,y=ndesc,xend=med_gen,yend=ndesc-0.25),col="black",lwd=0.65)
+
+vp.right <- grid::viewport(just="right",width=0.65,x = 0.65)
+print(ridges,vp=vp.right)
+dev.off()
+
+
+ggplot(data=muts,aes(x=gen,y=ndesc))+
   ylab("SFS Class")+xlab("Generation")+
-  theme_bw()+theme(panel.grid=element_blank())+
-  xlim(0,5000)+geom_density_ridges()
+  theme_bw()+theme(panel.grid = element_blank())+
+  scale_y_continuous(breaks=1:29)+
+  xlim(0,10000)+
+  geom_point(position=position_jitter(height=0.3),alpha=0.03,size=0.5)+
+  geom_segment(data=mean_mut_times,aes(x=mean_gen,y=ndesc-0.3,xend=mean_gen,yend=ndesc+0.3),col="red",lwd=1)
+
 
 
