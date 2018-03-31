@@ -12,7 +12,7 @@
 #and n is the population size). Whenever a coalescence occurs we randomly choose two indexes from the lineage 
 #vector (bc mating is random), replace the first index slot with a new node written in newick
 #tree format, and drop the second index. For example, if lineages A and B coalesce in a generation
-#the "A" in the lineages vector is replaced with "(A,B)" and "B" is dropped]. 
+#the "A" in the lineages vector is replaced with "(A,B)" and "B" is dropped. 
 #The same operation is conducted for the corresponding node ages. When all lineages have coalesced, 
 #the lineages vector should be a complete newick string of the resulting tree. Mutations, coalescence events,
 #and branch lengths are also stored in a table. 
