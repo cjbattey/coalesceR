@@ -1,6 +1,14 @@
 source("functions.R")
 
-sim <- coalesce(nsamples = 10,nsites=16000,sims=10000,cores=8,mu=2e-8)
+sim1 <- coalesce(nsamples = 10,nsites=16000,sims=1000,cores=8,mu=2e-8,n=10000)
+sim2 <- coalesce(nsamples = 10,nsites=16000,sims=1000,cores=8,mu=2e-8,n=1000)
+sim3 <- coalesce(nsamples = 10,nsites=16000,sims=1000,cores=8,mu=2e-8,n=c(rep(1e5,1000),rep(100,10000),rep(1e5,1000)))
+
+sfs1 <- get_sfs(sim1,plot=T)
+sfs2 <- get_sfs(sim2,plot=T)
+sfs3 <- get_sfs(sim3,plot=T)
+
+
 
 pdf(width=6,height=3,"sfs_ridge_plot_color_wide.pdf")
 #plot coalescent trees with edges colored by the number of descendent lineages
